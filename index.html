@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#060d1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="InstruMed">
+<title>InstruMed — Registro de Instrumentais</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+<script type="module">
+  import { initializeApp }                          from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, addDoc,
+           getDocs, orderBy, query,
+           deleteDoc, doc, where }                  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getAuth, onAuthStateChanged,
+           signInWithEmailAndPassword,
+           createUserWithEmailAndPassword,
+           signInWithPopup, GoogleAuthProvider,
+           signOut, sendPasswordResetEmail }         from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  // ✅ Configurações reais do projeto instrumen-cirurgico
+  const firebaseConfig = {
+    apiKey:            "AIzaSyD2KNBmlId_4-SQ5TDGOT3i_i4AR7o75o0",
+    authDomain:        "instrumen-cirurgico.firebaseapp.com",
+    projectId:         "instrumen-cirurgico",
+    storageBucket:     "instrumen-cirurgico.firebasestorage.app",
+    messagingSenderId: "1039993809792",
+    appId:             "1:1039993809792:web:0d3716d0de66935a7a6f65"
+  };
+
+  const app       = initializeApp(firebaseConfig);
+  const db        = getFirestore(app);
+  const auth      = getAuth(app);
+  const gProvider = new GoogleAuthProvider();
+
+  let currentUser       = null;
+  let capturedImageB64  = null;
+  let stream            = null;
+  let authMode          = 'login';
+
+  // ── Auth state ────────────────────────────────────
+  onAuthStateChanged(auth, user => {
+    currentUser = user;
+    if (user) {
+      document.getElementById('user-name').textContent = user.displayName || user.email;
+      showView('home');
+    } else {
+      showView('auth');
+    }
+  });
+
+  // ── Navigation ────────────────────────────────────
+  window.showView = name => {
+    ['auth','home','register','gallery','detail'].forEach(v =>
+      document.getElementById('view-' + v).style.display = 'none'
+    );
+    document.getElementById('view-' + name).style.display = 'flex';
+    if (name === 'gallery') loadGallery();
+  };
+
+  // ── Auth ──────────────────────────────────────────
+  window.setAuthMode = mode => {
+    authMode = mode;
+    const isLogin = mode === 'login';
+    document.getElementById('auth-title').textContent      = isLogin ? 'Entrar' : 'Criar conta';
+    document.getElementById('btn-submit-auth').textContent = isLogin ? 'Entrar' : 'Criar conta';
+    document.getElementById('toggle-auth-text').innerHTML  = isLogin
+      ? 'Não tem conta? <button onclick="setAuthMode(\'register\')">Criar conta</button>'
+      : 'Já tem conta? <button onclick="setAuthMode(\'login\')">Entrar</button>';
+    document.getElementById('forgot-link').style.display = isLogin ? 'block' : 'none';
+    clearAuthError();
+  };
+
+  window.submitAuth = async () => {
+    const email = document.getElementById('auth-email').value.trim();
+    const pass  = document.getElementById('auth-pass').value;
+    if (!email || !pass) { showAuthError('Preencha e-mail e senha.'); return; }
+    const btn = document.getElementById('btn-submit-auth');
+    btn.disabled = true; btn.textContent = 'Aguarde…';
+    clearAuthError();
+    try {
+      if (authMode === 'login') {
+        await signInWithEmailAndPassword(auth, email, pass);
+      } else {
+        await createUserWithEmailAndPassword(auth, email, pass);
+      }
+    } catch(e) {
+      showAuthError(friendlyAuthError(e.code));
+      btn.disabled = false;
+      btn.textContent = authMode === 'login' ? 'Entrar' : 'Criar conta';
+    }
+  };
+
+  window.loginWithGoogle = async () => {
+    clearAuthError();
+    try { await signInWithPopup(auth, gProvider); }
+    catch(e) { showAuthError(friendlyAuthError(e.code)); }
+  };
+
+  window.forgotPassword = async () => {
+    const email = document.getElementById('auth-email').value.trim();
+    if (!email) { showAuthError('Digite seu e-mail acima primeiro.'); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      showAuthError('E-mail de recuperação enviado!', true);
+    } catch(e) { showAuthError(friendlyAuthError(e.code)); }
+  };
+
+  window.logout = async () => { stopCamera(); await signOut(auth); };
+  window.authKeydown = e => { if (e.key === 'Enter') submitAuth(); };
+
+  function showAuthError(msg, success = false) {
+    const el = document.getElementById('auth-error');
+    el.textContent = msg; el.style.display = 'block';
+    el.style.color       = success ? 'var(--accent)' : '#ef4444';
+    el.style.background  = success ? 'rgba(0,212,170,0.08)' : 'rgba(239,68,68,0.08)';
+    el.style.borderColor = success ? 'rgba(0,212,170,0.25)' : 'rgba(239,68,68,0.25)';
+  }
+  function clearAuthError() {
+    const el = document.getElementById('auth-error');
+    el.style.display = 'none'; el.textContent = '';
+  }
+  function friendlyAuthError(code) {
+    const map = {
+      'auth/invalid-email':          'E-mail inválido.',
+      'auth/user-not-found':         'Usuário não encontrado.',
+      'auth/wrong-password':         'Senha incorreta.',
+      'auth/email-already-in-use':   'Este e-mail já está em uso.',
+      'auth/weak-password':          'A senha deve ter pelo menos 6 caracteres.',
+      'auth/too-many-requests':      'Muitas tentativas. Tente mais tarde.',
+      'auth/popup-closed-by-user':   'Login cancelado.',
+      'auth/network-request-failed': 'Erro de conexão.',
+      'auth/invalid-credential':     'E-mail ou senha incorretos.',
+    };
+    return map[code] || 'Erro: ' + code;
+  }
+
+  // ── Camera ────────────────────────────────────────
+  window.openCamera = async () => {
+    showView('register');
+    document.getElementById('form-section').style.display    = 'none';
+    document.getElementById('camera-section').style.display  = 'flex';
+    document.getElementById('preview-section').style.display = 'none';
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      document.getElementById('video').srcObject = stream;
+    } catch(e) {
+      alert('Não foi possível acessar a câmera. Verifique as permissões.');
+      showView('home');
+    }
+  };
+
+  window.capturePhoto = () => {
+    const video  = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    // Reduz resolução para caber no Firestore (max 1MB por doc)
+    const maxW = 800;
+    const ratio = video.videoHeight / video.videoWidth;
+    canvas.width  = maxW;
+    canvas.height = Math.round(maxW * ratio);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    capturedImageB64 = canvas.toDataURL('image/jpeg', 0.7);
+    stopCamera();
+    document.getElementById('preview-img').src = capturedImageB64;
+    document.getElementById('camera-section').style.display  = 'none';
+    document.getElementById('preview-section').style.display = 'flex';
+    document.getElementById('form-section').style.display    = 'flex';
+  };
+
+  window.retakePhoto = () => { capturedImageB64 = null; openCamera(); };
+
+  function stopCamera() {
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  }
+
+  window.cancelRegister = () => {
+    stopCamera(); capturedImageB64 = null;
+    document.getElementById('nome-instrumental').value = '';
+    document.getElementById('observacao').value = '';
+    showView('home');
+  };
+
+  // ── Save ──────────────────────────────────────────
+  window.saveRecord = async () => {
+    const nome = document.getElementById('nome-instrumental').value.trim();
+    if (!nome)             { shakeField('nome-instrumental'); return; }
+    if (!capturedImageB64) { alert('Tire uma foto do instrumental primeiro.'); return; }
+
+    const btn = document.getElementById('btn-salvar');
+    btn.disabled = true; btn.textContent = 'Salvando…';
+
+    try {
+      const obs = document.getElementById('observacao').value.trim();
+      await addDoc(collection(db, 'instrumentais'), {
+        nome,
+        observacao: obs || null,
+        imageB64: capturedImageB64,   // foto salva direto no Firestore
+        uid: currentUser.uid,
+        criadoEm: new Date().toISOString()
+      });
+
+      capturedImageB64 = null;
+      document.getElementById('nome-instrumental').value = '';
+      document.getElementById('observacao').value = '';
+      btn.disabled = false; btn.textContent = 'Salvar';
+      showSuccessToast();
+      showView('gallery');
+    } catch(e) {
+      alert('Erro ao salvar: ' + e.message);
+      btn.disabled = false; btn.textContent = 'Salvar';
+    }
+  };
+
+  // ── Gallery ───────────────────────────────────────
+  async function loadGallery() {
+    const grid  = document.getElementById('gallery-grid');
+    const empty = document.getElementById('gallery-empty');
+    grid.innerHTML = '<div class="loading-spinner"></div>';
+    empty.style.display = 'none';
+
+    try {
+      const q = query(
+        collection(db, 'instrumentais'),
+        where('uid', '==', currentUser.uid),
+        orderBy('criadoEm', 'desc')
+      );
+      const snap = await getDocs(q);
+      const data = [];
+      snap.forEach(d => data.push({ id: d.id, ...d.data() }));
+
+      grid.innerHTML = '';
+      if (data.length === 0) { empty.style.display = 'flex'; return; }
+
+      data.forEach((item, i) => {
+        const card = document.createElement('div');
+        card.className = 'gallery-card';
+        card.style.animationDelay = (i * 0.06) + 's';
+        card.innerHTML = `
+          <img src="${item.imageB64}" alt="${item.nome}" loading="lazy">
+          <div class="card-info">
+            <span class="card-name">${item.nome}</span>
+            ${item.observacao ? `<span class="card-obs">${item.observacao}</span>` : ''}
+          </div>`;
+        card.onclick = () => openDetail(item);
+        grid.appendChild(card);
+      });
+    } catch(e) {
+      grid.innerHTML = `<p style="color:#ef4444;padding:2rem;text-align:center;grid-column:1/-1">Erro ao carregar.<br>${e.message}</p>`;
+    }
+  }
+
+  window.openDetail = item => {
+    document.getElementById('detail-img').src          = item.imageB64;
+    document.getElementById('detail-nome').textContent = item.nome;
+    document.getElementById('detail-obs').textContent  = item.observacao || '—';
+    document.getElementById('detail-data').textContent = new Date(item.criadoEm).toLocaleDateString('pt-BR', {
+      day:'2-digit', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit'
+    });
+    document.getElementById('btn-delete').onclick = () => deleteRecord(item);
+    showView('detail');
+  };
+
+  window.deleteRecord = async item => {
+    if (!confirm(`Excluir "${item.nome}"?`)) return;
+    try {
+      await deleteDoc(doc(db, 'instrumentais', item.id));
+      showView('gallery');
+    } catch(e) { alert('Erro ao excluir: ' + e.message); }
+  };
+
+  // ── Helpers ───────────────────────────────────────
+  function shakeField(id) {
+    const el = document.getElementById(id);
+    el.classList.remove('shake'); void el.offsetWidth;
+    el.classList.add('shake'); el.focus();
+  }
+  function showSuccessToast() {
+    const t = document.getElementById('toast');
+    t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 3000);
+  }
+</script>
+
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#060d1a;--surface:#0e1d30;--surface2:#162540;
+  --border:rgba(255,255,255,0.08);--accent:#00d4aa;--accent2:#0099ff;
+  --danger:#ef4444;--text:#f0f4ff;--text2:#8899bb;
+  --font-display:'DM Serif Display',serif;--font-body:'DM Sans',sans-serif;
+  --safe-bottom:env(safe-area-inset-bottom,20px);
+}
+html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-family:var(--font-body);overflow:hidden;-webkit-font-smoothing:antialiased}
+.view{position:fixed;inset:0;display:none;flex-direction:column;overflow-y:auto;overflow-x:hidden}
+
+/* AUTH */
+#view-auth{
+  background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(0,212,170,0.13) 0%,transparent 70%),
+             radial-gradient(ellipse 50% 40% at 90% 90%,rgba(0,153,255,0.09) 0%,transparent 70%),var(--bg);
+  align-items:center;justify-content:center;padding:2rem 1.5rem;
+}
+.auth-card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:2rem 1.5rem 1.8rem;display:flex;flex-direction:column;gap:1.3rem}
+.auth-logo-wrap{display:flex;flex-direction:column;align-items:center;gap:0.8rem}
+.auth-logo-icon{width:56px;height:56px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:16px;display:flex;align-items:center;justify-content:center;box-shadow:0 0 30px rgba(0,212,170,0.25)}
+.auth-logo-icon svg{width:28px;height:28px}
+.auth-logo-name{font-family:var(--font-display);font-size:1.6rem;letter-spacing:-0.02em}
+.auth-logo-name span{color:var(--accent);font-style:italic}
+.auth-title{font-family:var(--font-display);font-size:1.35rem;text-align:center}
+.auth-fields{display:flex;flex-direction:column;gap:0.8rem}
+.auth-input{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:0.85rem 1rem;outline:none;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none}
+.auth-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,170,0.12)}
+.auth-error{display:none;font-size:0.82rem;line-height:1.4;padding:0.6rem 0.8rem;border-radius:8px;border:1px solid}
+.btn-auth-primary{background:linear-gradient(135deg,var(--accent),#00b88d);color:#060d1a;font-family:var(--font-body);font-weight:700;font-size:1rem;border:none;border-radius:14px;padding:1rem;cursor:pointer;transition:transform .15s,opacity .2s;-webkit-tap-highlight-color:transparent}
+.btn-auth-primary:active{transform:scale(.97)}
+.btn-auth-primary:disabled{opacity:.5;cursor:not-allowed}
+.auth-divider{display:flex;align-items:center;gap:0.8rem;font-size:0.75rem;color:var(--text2)}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.btn-google{background:var(--surface2);border:1.5px solid var(--border);border-radius:14px;color:var(--text);font-family:var(--font-body);font-weight:500;font-size:0.95rem;padding:0.85rem;display:flex;align-items:center;justify-content:center;gap:0.7rem;cursor:pointer;transition:background .15s;-webkit-tap-highlight-color:transparent}
+.btn-google:active{background:#1e3050}
+.btn-google img{width:20px;height:20px;border-radius:4px}
+.auth-toggle{text-align:center;font-size:0.85rem;color:var(--text2)}
+.auth-toggle button{background:none;border:none;color:var(--accent);font-weight:600;font-family:var(--font-body);font-size:0.85rem;cursor:pointer;padding:0}
+.forgot-link{text-align:center}
+.forgot-link button{background:none;border:none;color:var(--text2);font-family:var(--font-body);font-size:0.8rem;cursor:pointer;text-decoration:underline}
+
+/* HOME */
+#view-home{
+  background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(0,212,170,0.11) 0%,transparent 70%),
+             radial-gradient(ellipse 60% 40% at 90% 80%,rgba(0,153,255,0.07) 0%,transparent 70%),var(--bg);
+  align-items:center;justify-content:center;padding:2rem 1.5rem;
+}
+.home-logo{width:72px;height:72px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:20px;display:flex;align-items:center;justify-content:center;margin-bottom:1.5rem;box-shadow:0 0 40px rgba(0,212,170,0.3)}
+.home-logo svg{width:38px;height:38px}
+.home-title{font-family:var(--font-display);font-size:2.6rem;letter-spacing:-0.02em;text-align:center;line-height:1.1;margin-bottom:0.5rem}
+.home-title span{color:var(--accent);font-style:italic}
+.home-sub{color:var(--text2);font-size:0.95rem;text-align:center;margin-bottom:0.6rem;line-height:1.5}
+.home-user{display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--accent);background:rgba(0,212,170,0.08);border:1px solid rgba(0,212,170,0.2);border-radius:100px;padding:0.35rem 0.9rem;margin-bottom:2rem;max-width:280px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.home-actions{display:flex;flex-direction:column;gap:1rem;width:100%;max-width:320px}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#00b88d);color:#060d1a;font-family:var(--font-body);font-weight:600;font-size:1rem;border:none;border-radius:14px;padding:1rem 1.5rem;display:flex;align-items:center;justify-content:center;gap:0.6rem;cursor:pointer;transition:transform .15s;box-shadow:0 4px 20px rgba(0,212,170,0.35);-webkit-tap-highlight-color:transparent}
+.btn-primary:active{transform:scale(.97)}
+.btn-secondary{background:var(--surface);color:var(--text);font-family:var(--font-body);font-weight:500;font-size:1rem;border:1px solid var(--border);border-radius:14px;padding:1rem 1.5rem;display:flex;align-items:center;justify-content:center;gap:0.6rem;cursor:pointer;transition:background .15s;-webkit-tap-highlight-color:transparent}
+.btn-secondary:active{background:var(--surface2)}
+.btn-logout{background:none;border:none;color:var(--text2);font-family:var(--font-body);font-size:0.82rem;cursor:pointer;margin-top:0.5rem;display:flex;align-items:center;gap:0.4rem;-webkit-tap-highlight-color:transparent}
+
+/* REGISTER */
+#view-register{background:var(--bg)}
+.top-bar{display:flex;align-items:center;gap:1rem;padding:1rem 1.2rem;padding-top:calc(1rem + env(safe-area-inset-top,0px));border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:10;flex-shrink:0}
+.top-bar-title{font-family:var(--font-display);font-size:1.25rem;flex:1}
+.btn-icon{width:38px;height:38px;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--text2);display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;flex-shrink:0}
+#camera-section{flex:1;flex-direction:column;align-items:center;justify-content:flex-end;position:relative;background:#000;display:none}
+#video{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+.camera-controls{position:relative;z-index:5;width:100%;display:flex;align-items:center;justify-content:center;padding:2rem 2rem calc(2rem + var(--safe-bottom));background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,transparent 100%)}
+.shutter-btn{width:72px;height:72px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);cursor:pointer;box-shadow:0 0 0 2px #fff;transition:transform .1s;-webkit-tap-highlight-color:transparent}
+.shutter-btn:active{transform:scale(.93)}
+#preview-section{display:none;flex-direction:column;align-items:center;flex-shrink:0}
+#preview-img{width:100%;max-height:280px;object-fit:cover}
+.retake-bar{width:100%;padding:.7rem 1.2rem;background:rgba(0,0,0,0.5);display:flex;justify-content:flex-end}
+.btn-retake{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#fff;font-size:.85rem;padding:.4rem .9rem;cursor:pointer;display:flex;align-items:center;gap:.4rem;-webkit-tap-highlight-color:transparent}
+#form-section{display:none;flex-direction:column;padding:1.5rem 1.2rem;gap:1.2rem;flex:1}
+.field-label{font-size:.78rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem}
+.badge-required{background:var(--accent);color:#060d1a;font-size:.6rem;padding:1px 5px;border-radius:4px;font-weight:700}
+.field-input,.field-textarea{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:.85rem 1rem;outline:none;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none}
+.field-input:focus,.field-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,170,0.12)}
+.field-textarea{resize:none;height:90px}
+.form-actions{display:flex;gap:.8rem;padding-bottom:calc(1rem + var(--safe-bottom))}
+.btn-save{flex:1;background:linear-gradient(135deg,var(--accent),#00b88d);color:#060d1a;font-weight:700;font-size:1rem;border:none;border-radius:14px;padding:1rem;cursor:pointer;transition:transform .15s,opacity .2s;-webkit-tap-highlight-color:transparent}
+.btn-save:active{transform:scale(.97)}
+.btn-save:disabled{opacity:.5;cursor:not-allowed}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+.shake{animation:shake .4s ease;border-color:var(--danger)!important}
+
+/* GALLERY */
+#view-gallery{background:var(--bg)}
+.gallery-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);flex:1}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.gallery-card{background:var(--surface);cursor:pointer;aspect-ratio:3/4;overflow:hidden;position:relative;animation:fadeUp .4s both;-webkit-tap-highlight-color:transparent}
+.gallery-card img{width:100%;height:100%;object-fit:cover;transition:transform .3s}
+.gallery-card:active img{transform:scale(1.03)}
+.card-info{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(to top,rgba(6,13,26,0.95) 0%,transparent 100%);padding:2rem .8rem .8rem;display:flex;flex-direction:column;gap:.2rem}
+.card-name{font-size:.85rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-obs{font-size:.72rem;color:rgba(255,255,255,0.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gallery-empty{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:3rem;color:var(--text2);text-align:center}
+.gallery-empty svg{opacity:.3}
+.gallery-empty p{font-size:.95rem;line-height:1.5}
+.loading-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:3rem auto;grid-column:1/-1}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* DETAIL */
+#view-detail{background:var(--bg)}
+.detail-img-wrap{width:100%;max-height:55vh;overflow:hidden;flex-shrink:0}
+.detail-img-wrap img{width:100%;height:100%;object-fit:cover}
+.detail-body{padding:1.5rem 1.2rem;flex:1;display:flex;flex-direction:column;gap:1.2rem}
+.detail-nome{font-family:var(--font-display);font-size:1.8rem;line-height:1.2}
+.detail-row{display:flex;flex-direction:column;gap:.3rem}
+.detail-key{font-size:.72rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.07em}
+.detail-val{font-size:.95rem;color:var(--text);line-height:1.5}
+.detail-date{color:var(--text2);font-size:.85rem}
+.btn-danger{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:14px;color:#ef4444;font-family:var(--font-body);font-weight:600;font-size:.95rem;padding:.9rem;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:.5rem;margin-top:auto;margin-bottom:calc(1rem + var(--safe-bottom));-webkit-tap-highlight-color:transparent}
+
+#canvas{display:none}
+#toast{position:fixed;bottom:calc(1.5rem + var(--safe-bottom));left:50%;transform:translateX(-50%) translateY(80px);background:var(--accent);color:#060d1a;font-weight:600;font-size:.9rem;padding:.75rem 1.5rem;border-radius:100px;display:flex;align-items:center;gap:.5rem;transition:transform .35s cubic-bezier(0.34,1.56,0.64,1),opacity .35s;opacity:0;z-index:999;white-space:nowrap}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+</style>
+</head>
+<body>
+
+<!-- AUTH -->
+<div class="view" id="view-auth">
+  <div class="auth-card">
+    <div class="auth-logo-wrap">
+      <div class="auth-logo-icon">
+        <svg viewBox="0 0 38 38" fill="none">
+          <path d="M19 4 L32 11 L32 27 L19 34 L6 27 L6 11 Z" stroke="white" stroke-width="1.5" fill="none"/>
+          <circle cx="19" cy="19" r="5" fill="white"/>
+          <line x1="19" y1="4" x2="19" y2="14" stroke="white" stroke-width="1.5"/>
+          <line x1="19" y1="24" x2="19" y2="34" stroke="white" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="auth-logo-name">Instru<span>Med</span></div>
+    </div>
+    <h2 class="auth-title" id="auth-title">Entrar</h2>
+    <div class="auth-fields">
+      <input class="auth-input" id="auth-email" type="email" placeholder="E-mail" autocomplete="email" onkeydown="authKeydown(event)">
+      <input class="auth-input" id="auth-pass" type="password" placeholder="Senha" autocomplete="current-password" onkeydown="authKeydown(event)">
+    </div>
+    <div class="auth-error" id="auth-error"></div>
+    <button class="btn-auth-primary" id="btn-submit-auth" onclick="submitAuth()">Entrar</button>
+    <div class="forgot-link" id="forgot-link">
+      <button onclick="forgotPassword()">Esqueci minha senha</button>
+    </div>
+    <div class="auth-divider">ou</div>
+    <button class="btn-google" onclick="loginWithGoogle()">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+      Entrar com Google
+    </button>
+    <div class="auth-toggle" id="toggle-auth-text">
+      Não tem conta? <button onclick="setAuthMode('register')">Criar conta</button>
+    </div>
+  </div>
+</div>
+
+<!-- HOME -->
+<div class="view" id="view-home">
+  <div class="home-logo">
+    <svg viewBox="0 0 38 38" fill="none">
+      <path d="M19 4 L32 11 L32 27 L19 34 L6 27 L6 11 Z" stroke="white" stroke-width="1.5" fill="none"/>
+      <circle cx="19" cy="19" r="5" fill="white"/>
+      <line x1="19" y1="4" x2="19" y2="14" stroke="white" stroke-width="1.5"/>
+      <line x1="19" y1="24" x2="19" y2="34" stroke="white" stroke-width="1.5"/>
+    </svg>
+  </div>
+  <h1 class="home-title">Instru<span>Med</span></h1>
+  <p class="home-sub">Registro fotográfico de instrumentais cirúrgicos</p>
+  <div class="home-user">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+    </svg>
+    <span id="user-name"></span>
+  </div>
+  <div class="home-actions">
+    <button class="btn-primary" onclick="openCamera()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+      Fotografar Instrumental
+    </button>
+    <button class="btn-secondary" onclick="showView('gallery')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+      </svg>
+      Ver Galeria
+    </button>
+    <button class="btn-logout" onclick="logout()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+        <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+      Sair da conta
+    </button>
+  </div>
+</div>
+
+<!-- REGISTER -->
+<div class="view" id="view-register">
+  <div class="top-bar">
+    <button class="btn-icon" onclick="cancelRegister()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M19 12H5M12 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <span class="top-bar-title">Novo Registro</span>
+  </div>
+  <div id="camera-section" style="display:none;flex:1;position:relative;flex-direction:column;">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="camera-controls">
+      <button class="shutter-btn" onclick="capturePhoto()"></button>
+    </div>
+  </div>
+  <div id="preview-section">
+    <img id="preview-img" src="" alt="Preview">
+    <div class="retake-bar">
+      <button class="btn-retake" onclick="retakePhoto()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.51"/>
+        </svg>
+        Tirar outra
+      </button>
+    </div>
+  </div>
+  <div id="form-section">
+    <div>
+      <div class="field-label">Nome do Instrumental <span class="badge-required">OBRIGATÓRIO</span></div>
+      <input class="field-input" id="nome-instrumental" type="text" placeholder="Ex: Pinça Halsted Mosquito" autocomplete="off">
+    </div>
+    <div>
+      <div class="field-label">Observação</div>
+      <textarea class="field-textarea" id="observacao" placeholder="Ex: Lote 2024-B, pequena marca no cabo…"></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn-save" id="btn-salvar" onclick="saveRecord()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- GALLERY -->
+<div class="view" id="view-gallery">
+  <div class="top-bar">
+    <button class="btn-icon" onclick="showView('home')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M19 12H5M12 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <span class="top-bar-title">Galeria</span>
+    <button class="btn-icon" onclick="openCamera()" style="background:var(--accent);border-color:var(--accent);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#060d1a" stroke-width="2.5">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+  <div id="gallery-grid" class="gallery-grid"></div>
+  <div id="gallery-empty" class="gallery-empty">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+      <circle cx="12" cy="13" r="4"/>
+    </svg>
+    <p>Nenhum instrumental registrado ainda.<br>Toque em + para adicionar o primeiro.</p>
+  </div>
+</div>
+
+<!-- DETAIL -->
+<div class="view" id="view-detail">
+  <div class="top-bar">
+    <button class="btn-icon" onclick="showView('gallery')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M19 12H5M12 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <span class="top-bar-title">Detalhes</span>
+  </div>
+  <div class="detail-img-wrap"><img id="detail-img" src="" alt=""></div>
+  <div class="detail-body">
+    <h2 class="detail-nome" id="detail-nome"></h2>
+    <div class="detail-row">
+      <span class="detail-key">Observação</span>
+      <span class="detail-val" id="detail-obs"></span>
+    </div>
+    <div class="detail-row">
+      <span class="detail-key">Registrado em</span>
+      <span class="detail-val detail-date" id="detail-data"></span>
+    </div>
+    <button class="btn-danger" id="btn-delete">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
+        <path d="M10 11v6M14 11v6M9 6V4h6v2"/>
+      </svg>
+      Excluir Registro
+    </button>
+  </div>
+</div>
+
+<canvas id="canvas"></canvas>
+<div id="toast">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+    <polyline points="20 6 9 17 4 12"/>
+  </svg>
+  Instrumental salvo com sucesso!
+</div>
+
+</body>
+</html>
