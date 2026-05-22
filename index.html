@@ -13,15 +13,16 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
 <script type="module">
-  import { initializeApp }                          from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, addDoc,
-           getDocs, orderBy, query,
-           deleteDoc, doc, where }                  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { initializeApp }             from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection,
+           addDoc, getDocs, orderBy,
+           query, deleteDoc, doc,
+           where }                     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getAuth, onAuthStateChanged,
            signInWithEmailAndPassword,
            createUserWithEmailAndPassword,
            signInWithPopup, GoogleAuthProvider,
-           signOut, sendPasswordResetEmail }         from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+           signOut, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey:            "AIzaSyD2KNBmlId_4-SQ5TDGOT3i_i4AR7o75o0",
@@ -42,6 +43,7 @@
   let stream           = null;
   let authMode         = 'login';
   let allRecords       = [];
+  let currentFolder    = null; // { key, label, items }
 
   // ── Auth ──────────────────────────────────────────
   onAuthStateChanged(auth, user => {
@@ -55,11 +57,11 @@
   });
 
   window.showView = name => {
-    ['auth','home','register','gallery','detail'].forEach(v =>
+    ['auth','home','register','folders','folder-detail','detail'].forEach(v =>
       document.getElementById('view-' + v).style.display = 'none'
     );
     document.getElementById('view-' + name).style.display = 'flex';
-    if (name === 'gallery') loadGallery();
+    if (name === 'folders') loadFolders();
   };
 
   window.setAuthMode = mode => {
@@ -190,32 +192,36 @@
     try {
       const now = new Date();
       const obs = document.getElementById('observacao').value.trim();
+      // dateKey = "YYYY-MM-DD" para ordenação correta
+      const dateKey   = toDateKey(now);
+      const dateLabel = toLongLabel(now);
+
       await addDoc(collection(db, 'instrumentais'), {
         nome, observacao: obs || null,
         imageB64: capturedImageB64,
         uid: currentUser.uid,
         criadoEm: now.toISOString(),
-        dataLabel: formatDateLabel(now)
+        dateKey,
+        dateLabel
       });
       capturedImageB64 = null;
       document.getElementById('nome-instrumental').value = '';
       document.getElementById('observacao').value = '';
       btn.disabled = false; btn.textContent = 'Salvar';
       showSuccessToast();
-      showView('gallery');
+      showView('folders');
     } catch(e) {
       alert('Erro ao salvar: ' + e.message);
       btn.disabled = false; btn.textContent = 'Salvar';
     }
   };
 
-  // ── Gallery ───────────────────────────────────────
-  async function loadGallery() {
-    const grid  = document.getElementById('gallery-grid');
-    const empty = document.getElementById('gallery-empty');
-    grid.innerHTML = '<div class="loading-spinner"></div>';
+  // ── Folders ───────────────────────────────────────
+  async function loadFolders() {
+    const list  = document.getElementById('folders-list');
+    const empty = document.getElementById('folders-empty');
+    list.innerHTML  = '<div class="loading-spinner"></div>';
     empty.style.display = 'none';
-    document.getElementById('search-date').value = '';
 
     try {
       const q = query(
@@ -226,85 +232,87 @@
       const snap = await getDocs(q);
       allRecords = [];
       snap.forEach(d => allRecords.push({ id: d.id, ...d.data() }));
-      renderGallery(allRecords);
-    } catch(e) {
-      grid.innerHTML = `<p style="color:#ef4444;padding:2rem;text-align:center;grid-column:1/-1">Erro ao carregar.<br>${e.message}</p>`;
-    }
-  }
 
-  function renderGallery(records) {
-    const grid  = document.getElementById('gallery-grid');
-    const empty = document.getElementById('gallery-empty');
-    grid.innerHTML = '';
-
-    if (records.length === 0) {
-      empty.style.display = 'flex';
-      return;
-    }
-    empty.style.display = 'none';
-
-    // Agrupar por data
-    const groups = {};
-    records.forEach(item => {
-      const label = item.dataLabel || formatDateLabel(new Date(item.criadoEm));
-      if (!groups[label]) groups[label] = [];
-      groups[label].push(item);
-    });
-
-    let delay = 0;
-    Object.entries(groups).forEach(([dateLabel, items]) => {
-      // Cabeçalho da data
-      const header = document.createElement('div');
-      header.className = 'date-header';
-      header.innerHTML = `
-        <span class="date-header-label">${dateLabel}</span>
-        <span class="date-header-count">${items.length} ${items.length === 1 ? 'item' : 'itens'}</span>`;
-      grid.appendChild(header);
-
-      // Grid de cards para essa data
-      const row = document.createElement('div');
-      row.className = 'date-row';
-
-      items.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'gallery-card';
-        card.style.animationDelay = (delay * 0.05) + 's';
-        delay++;
-        card.innerHTML = `
-          <img src="${item.imageB64}" alt="${item.nome}" loading="lazy">
-          <div class="card-info">
-            <span class="card-name">${item.nome}</span>
-            ${item.observacao ? `<span class="card-obs">${item.observacao}</span>` : ''}
-          </div>`;
-        card.onclick = () => openDetail(item);
-        row.appendChild(card);
+      // Agrupar por dateKey
+      const groups = {};
+      allRecords.forEach(item => {
+        const key   = item.dateKey   || toDateKey(new Date(item.criadoEm));
+        const label = item.dateLabel || toLongLabel(new Date(item.criadoEm));
+        if (!groups[key]) groups[key] = { key, label, items: [] };
+        groups[key].items.push(item);
       });
 
-      grid.appendChild(row);
-    });
+      // Ordenar do mais recente para o mais antigo
+      const sorted = Object.values(groups).sort((a,b) => b.key.localeCompare(a.key));
+
+      list.innerHTML = '';
+      if (sorted.length === 0) { empty.style.display = 'flex'; return; }
+
+      sorted.forEach((folder, i) => {
+        const card = document.createElement('div');
+        card.className = 'folder-card';
+        card.style.animationDelay = (i * 0.06) + 's';
+
+        const thumb = folder.items[0].imageB64;
+        const isToday = folder.key === toDateKey(new Date());
+        const dayLabel = isToday ? 'Hoje' : getDayOfWeek(folder.key);
+
+        card.innerHTML = `
+          <div class="folder-thumb">
+            <img src="${thumb}" alt="${folder.label}">
+            <div class="folder-thumb-overlay"></div>
+          </div>
+          <div class="folder-info">
+            <div class="folder-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </div>
+            <div class="folder-text">
+              <span class="folder-day">${dayLabel}</span>
+              <span class="folder-date">${folder.label}</span>
+            </div>
+            <div class="folder-meta">
+              <span class="folder-count">${folder.items.length}</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+          </div>`;
+        card.onclick = () => openFolder(folder);
+        list.appendChild(card);
+      });
+    } catch(e) {
+      list.innerHTML = `<p style="color:#ef4444;padding:2rem;text-align:center">Erro ao carregar.<br>${e.message}</p>`;
+    }
   }
 
-  // ── Search ────────────────────────────────────────
-  window.searchByDate = () => {
-    const val = document.getElementById('search-date').value;
-    if (!val) { renderGallery(allRecords); return; }
+  window.openFolder = folder => {
+    currentFolder = folder;
+    document.getElementById('folder-detail-title').textContent = folder.label;
+    document.getElementById('folder-detail-count').textContent =
+      `${folder.items.length} ${folder.items.length === 1 ? 'instrumental' : 'instrumentais'}`;
+    renderFolderItems(folder.items);
+    showView('folder-detail');
+  };
 
-    // val = "YYYY-MM-DD"
-    const [year, month, day] = val.split('-');
-    const dateObj = new Date(year, month - 1, day);
-    const label = formatDateLabel(dateObj);
-
-    const filtered = allRecords.filter(item => {
-      const itemLabel = item.dataLabel || formatDateLabel(new Date(item.criadoEm));
-      return itemLabel === label;
+  function renderFolderItems(items) {
+    const grid = document.getElementById('folder-items-grid');
+    grid.innerHTML = '';
+    items.forEach((item, i) => {
+      const card = document.createElement('div');
+      card.className = 'gallery-card';
+      card.style.animationDelay = (i * 0.05) + 's';
+      card.innerHTML = `
+        <img src="${item.imageB64}" alt="${item.nome}" loading="lazy">
+        <div class="card-info">
+          <span class="card-name">${item.nome}</span>
+          ${item.observacao ? `<span class="card-obs">${item.observacao}</span>` : ''}
+        </div>`;
+      card.onclick = () => openDetail(item);
+      grid.appendChild(card);
     });
-    renderGallery(filtered);
-  };
-
-  window.clearSearch = () => {
-    document.getElementById('search-date').value = '';
-    renderGallery(allRecords);
-  };
+  }
 
   // ── Detail ────────────────────────────────────────
   window.openDetail = item => {
@@ -322,13 +330,38 @@
     if (!confirm(`Excluir "${item.nome}"?`)) return;
     try {
       await deleteDoc(doc(db, 'instrumentais', item.id));
-      showView('gallery');
+      // Remove da pasta atual
+      if (currentFolder) {
+        currentFolder.items = currentFolder.items.filter(i => i.id !== item.id);
+        if (currentFolder.items.length === 0) {
+          showView('folders');
+        } else {
+          renderFolderItems(currentFolder.items);
+          showView('folder-detail');
+        }
+      } else {
+        showView('folders');
+      }
     } catch(e) { alert('Erro ao excluir: ' + e.message); }
   };
 
   // ── Helpers ───────────────────────────────────────
-  function formatDateLabel(date) {
+  function toDateKey(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function toLongLabel(date) {
     return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+  }
+
+  function getDayOfWeek(dateKey) {
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    const days = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
+    return days[date.getDay()];
   }
 
   function shakeField(id) {
@@ -365,16 +398,15 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 .auth-logo-name span{color:var(--accent);font-style:italic}
 .auth-title{font-family:var(--font-display);font-size:1.35rem;text-align:center}
 .auth-fields{display:flex;flex-direction:column;gap:0.8rem}
-.auth-input{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:0.85rem 1rem;outline:none;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none}
+.auth-input{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:0.85rem 1rem;outline:none;transition:border-color .2s;-webkit-appearance:none}
 .auth-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,170,0.12)}
 .auth-error{display:none;font-size:0.82rem;line-height:1.4;padding:0.6rem 0.8rem;border-radius:8px;border:1px solid}
 .btn-auth-primary{background:linear-gradient(135deg,var(--accent),#00b88d);color:#060d1a;font-family:var(--font-body);font-weight:700;font-size:1rem;border:none;border-radius:14px;padding:1rem;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.btn-auth-primary:active{transform:scale(.97)}
 .btn-auth-primary:disabled{opacity:.5}
 .auth-divider{display:flex;align-items:center;gap:0.8rem;font-size:0.75rem;color:var(--text2)}
 .auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border)}
 .btn-google{background:var(--surface2);border:1.5px solid var(--border);border-radius:14px;color:var(--text);font-family:var(--font-body);font-weight:500;font-size:0.95rem;padding:0.85rem;display:flex;align-items:center;justify-content:center;gap:0.7rem;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.btn-google img{width:20px;height:20px;border-radius:4px}
+.btn-google img{width:20px;height:20px}
 .auth-toggle{text-align:center;font-size:0.85rem;color:var(--text2)}
 .auth-toggle button{background:none;border:none;color:var(--accent);font-weight:600;font-family:var(--font-body);font-size:0.85rem;cursor:pointer;padding:0}
 .forgot-link{text-align:center}
@@ -392,12 +424,14 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 .btn-primary{background:linear-gradient(135deg,var(--accent),#00b88d);color:#060d1a;font-family:var(--font-body);font-weight:600;font-size:1rem;border:none;border-radius:14px;padding:1rem 1.5rem;display:flex;align-items:center;justify-content:center;gap:0.6rem;cursor:pointer;box-shadow:0 4px 20px rgba(0,212,170,0.35);-webkit-tap-highlight-color:transparent}
 .btn-primary:active{transform:scale(.97)}
 .btn-secondary{background:var(--surface);color:var(--text);font-family:var(--font-body);font-weight:500;font-size:1rem;border:1px solid var(--border);border-radius:14px;padding:1rem 1.5rem;display:flex;align-items:center;justify-content:center;gap:0.6rem;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn-secondary:active{background:var(--surface2)}
 .btn-logout{background:none;border:none;color:var(--text2);font-family:var(--font-body);font-size:0.82rem;cursor:pointer;margin-top:0.5rem;display:flex;align-items:center;gap:0.4rem;-webkit-tap-highlight-color:transparent}
 
 /* REGISTER */
 #view-register{background:var(--bg)}
 .top-bar{display:flex;align-items:center;gap:1rem;padding:1rem 1.2rem;padding-top:calc(1rem + env(safe-area-inset-top,0px));border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:10;flex-shrink:0}
 .top-bar-title{font-family:var(--font-display);font-size:1.25rem;flex:1}
+.top-bar-sub{font-size:0.75rem;color:var(--text2);font-family:var(--font-body)}
 .btn-icon{width:38px;height:38px;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--text2);display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;flex-shrink:0}
 #camera-section{flex:1;flex-direction:column;align-items:center;justify-content:flex-end;position:relative;background:#000;display:none}
 #video{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
@@ -411,7 +445,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 #form-section{display:none;flex-direction:column;padding:1.5rem 1.2rem;gap:1.2rem;flex:1}
 .field-label{font-size:.78rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem}
 .badge-required{background:var(--accent);color:#060d1a;font-size:.6rem;padding:1px 5px;border-radius:4px;font-weight:700}
-.field-input,.field-textarea{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:.85rem 1rem;outline:none;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none}
+.field-input,.field-textarea{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:.85rem 1rem;outline:none;transition:border-color .2s;-webkit-appearance:none}
 .field-input:focus,.field-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,170,0.12)}
 .field-textarea{resize:none;height:90px}
 .form-actions{padding-bottom:calc(1rem + var(--safe-bottom))}
@@ -421,77 +455,79 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
 .shake{animation:shake .4s ease;border-color:var(--danger)!important}
 
-/* GALLERY */
-#view-gallery{background:var(--bg)}
+/* FOLDERS */
+#view-folders{background:var(--bg)}
+.folders-list{flex:1;display:flex;flex-direction:column;gap:0;overflow-y:auto;padding:0.8rem 1.2rem calc(1rem + var(--safe-bottom))}
 
-.search-bar{
-  display:flex;align-items:center;gap:0.6rem;
-  padding:0.8rem 1.2rem;
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+
+.folder-card{
+  display:flex;flex-direction:column;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:16px;
+  overflow:hidden;
+  margin-bottom:0.8rem;
+  cursor:pointer;
+  animation:fadeUp .35s both;
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .15s;
+}
+.folder-card:active{transform:scale(.98)}
+
+.folder-thumb{
+  width:100%;height:120px;position:relative;overflow:hidden;flex-shrink:0;
+}
+.folder-thumb img{width:100%;height:100%;object-fit:cover}
+.folder-thumb-overlay{
+  position:absolute;inset:0;
+  background:linear-gradient(to bottom,transparent 40%,rgba(6,13,26,0.7) 100%);
+}
+
+.folder-info{
+  display:flex;align-items:center;gap:0.8rem;
+  padding:0.9rem 1rem;
+}
+.folder-icon-wrap{
+  width:36px;height:36px;flex-shrink:0;
+  background:rgba(0,212,170,0.1);
+  border:1px solid rgba(0,212,170,0.2);
+  border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--accent);
+}
+.folder-text{display:flex;flex-direction:column;flex:1;gap:0.1rem;min-width:0}
+.folder-day{font-size:0.75rem;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.05em}
+.folder-date{font-family:var(--font-display);font-size:1.05rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-meta{display:flex;align-items:center;gap:0.3rem;flex-shrink:0;color:var(--text2)}
+.folder-count{font-size:0.85rem;font-weight:600;color:var(--text2);background:var(--surface2);border-radius:100px;padding:0.15rem 0.5rem;border:1px solid var(--border)}
+
+.folders-empty{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:3rem;color:var(--text2);text-align:center}
+.folders-empty svg{opacity:.3}
+.folders-empty p{font-size:.95rem;line-height:1.5}
+
+/* FOLDER DETAIL */
+#view-folder-detail{background:var(--bg)}
+.folder-detail-header{
+  padding:0 1.2rem 0.8rem;
   background:var(--surface);
   border-bottom:1px solid var(--border);
   flex-shrink:0;
 }
-.search-input-wrap{
-  flex:1;position:relative;display:flex;align-items:center;
-}
-.search-input-wrap svg{
-  position:absolute;left:0.8rem;color:var(--text2);flex-shrink:0;
-}
-.search-date-input{
-  width:100%;background:var(--surface2);border:1.5px solid var(--border);
-  border-radius:10px;color:var(--text);font-family:var(--font-body);
-  font-size:0.9rem;padding:0.6rem 0.8rem 0.6rem 2.4rem;
-  outline:none;-webkit-appearance:none;
-}
-.search-date-input:focus{border-color:var(--accent)}
-.btn-clear-search{
-  background:none;border:none;color:var(--text2);
-  font-family:var(--font-body);font-size:0.82rem;
-  cursor:pointer;white-space:nowrap;padding:0.4rem;
-  -webkit-tap-highlight-color:transparent;
-}
+.folder-detail-date{font-family:var(--font-display);font-size:1.4rem;line-height:1.2;padding-top:0.2rem}
+.folder-detail-count{font-size:0.8rem;color:var(--text2);margin-top:0.2rem}
 
-.gallery-grid{flex:1;overflow-y:auto;padding-bottom:calc(1rem + var(--safe-bottom))}
-
-.date-header{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:1rem 1.2rem 0.5rem;
-  position:sticky;top:0;
-  background:var(--bg);
-  z-index:5;
+.folder-items-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:2px;
+  flex:1;overflow-y:auto;padding:2px;padding-bottom:calc(1rem + var(--safe-bottom));
 }
-.date-header-label{
-  font-family:var(--font-display);
-  font-size:1.1rem;
-  color:var(--text);
-}
-.date-header-count{
-  font-size:0.75rem;
-  color:var(--text2);
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:100px;
-  padding:0.2rem 0.6rem;
-}
-
-.date-row{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:2px;
-  padding:0 2px 2px;
-}
-
-@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-.gallery-card{background:var(--surface);cursor:pointer;aspect-ratio:3/4;overflow:hidden;position:relative;animation:fadeUp .4s both;-webkit-tap-highlight-color:transparent;border-radius:4px}
+.gallery-card{background:var(--surface);cursor:pointer;aspect-ratio:3/4;overflow:hidden;position:relative;animation:fadeUp .35s both;-webkit-tap-highlight-color:transparent;border-radius:4px}
 .gallery-card img{width:100%;height:100%;object-fit:cover;transition:transform .3s}
 .gallery-card:active img{transform:scale(1.03)}
 .card-info{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(to top,rgba(6,13,26,0.95) 0%,transparent 100%);padding:2rem .8rem .8rem;display:flex;flex-direction:column;gap:.2rem}
 .card-name{font-size:.85rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-obs{font-size:.72rem;color:rgba(255,255,255,0.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-.gallery-empty{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:3rem;color:var(--text2);text-align:center}
-.gallery-empty svg{opacity:.3}
-.gallery-empty p{font-size:.95rem;line-height:1.5}
 .loading-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:3rem auto}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -535,9 +571,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
     </div>
     <div class="auth-error" id="auth-error"></div>
     <button class="btn-auth-primary" id="btn-submit-auth" onclick="submitAuth()">Entrar</button>
-    <div class="forgot-link" id="forgot-link">
-      <button onclick="forgotPassword()">Esqueci minha senha</button>
-    </div>
+    <div class="forgot-link" id="forgot-link"><button onclick="forgotPassword()">Esqueci minha senha</button></div>
     <div class="auth-divider">ou</div>
     <button class="btn-google" onclick="loginWithGoogle()">
       <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
@@ -575,12 +609,11 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
       </svg>
       Fotografar Instrumental
     </button>
-    <button class="btn-secondary" onclick="showView('gallery')">
+    <button class="btn-secondary" onclick="showView('folders')">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-        <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
       </svg>
-      Ver Galeria
+      Ver Pastas por Data
     </button>
     <button class="btn-logout" onclick="logout()">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -600,7 +633,9 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
         <path d="M19 12H5M12 19l-7-7 7-7"/>
       </svg>
     </button>
-    <span class="top-bar-title">Novo Registro</span>
+    <div style="flex:1">
+      <div class="top-bar-title">Novo Registro</div>
+    </div>
   </div>
   <div id="camera-section" style="display:none;flex:1;position:relative;flex-direction:column;">
     <video id="video" autoplay playsinline muted></video>
@@ -634,15 +669,15 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
   </div>
 </div>
 
-<!-- GALLERY -->
-<div class="view" id="view-gallery">
+<!-- FOLDERS -->
+<div class="view" id="view-folders">
   <div class="top-bar">
     <button class="btn-icon" onclick="showView('home')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M19 12H5M12 19l-7-7 7-7"/>
       </svg>
     </button>
-    <span class="top-bar-title">Galeria</span>
+    <span class="top-bar-title">Pastas por Data</span>
     <button class="btn-icon" onclick="openCamera()" style="background:var(--accent);border-color:var(--accent);">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#060d1a" stroke-width="2.5">
         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -650,31 +685,40 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
     </button>
   </div>
 
-  <!-- Barra de busca por data -->
-  <div class="search-bar">
-    <div class="search-input-wrap">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-      </svg>
-      <input class="search-date-input" id="search-date" type="date" onchange="searchByDate()">
-    </div>
-    <button class="btn-clear-search" onclick="clearSearch()">Limpar</button>
-  </div>
-
-  <div id="gallery-grid" class="gallery-grid"></div>
-  <div id="gallery-empty" class="gallery-empty">
+  <div id="folders-list" class="folders-list"></div>
+  <div id="folders-empty" class="folders-empty">
     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-      <circle cx="12" cy="13" r="4"/>
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
     </svg>
-    <p>Nenhum instrumental encontrado<br>para esta data.</p>
+    <p>Nenhuma pasta ainda.<br>Fotografe o primeiro instrumental!</p>
   </div>
+</div>
+
+<!-- FOLDER DETAIL -->
+<div class="view" id="view-folder-detail">
+  <div class="top-bar">
+    <button class="btn-icon" onclick="showView('folders')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M19 12H5M12 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <button class="btn-icon" onclick="openCamera()" style="background:var(--accent);border-color:var(--accent);margin-left:auto">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#060d1a" stroke-width="2.5">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+  <div class="folder-detail-header">
+    <div class="folder-detail-date" id="folder-detail-title"></div>
+    <div class="folder-detail-count" id="folder-detail-count"></div>
+  </div>
+  <div id="folder-items-grid" class="folder-items-grid"></div>
 </div>
 
 <!-- DETAIL -->
 <div class="view" id="view-detail">
   <div class="top-bar">
-    <button class="btn-icon" onclick="showView('gallery')">
+    <button class="btn-icon" onclick="showView('folder-detail')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M19 12H5M12 19l-7-7 7-7"/>
       </svg>
