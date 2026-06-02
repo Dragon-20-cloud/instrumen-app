@@ -38,13 +38,13 @@
   const auth      = getAuth(app);
   const gProvider = new GoogleAuthProvider();
 
-  let currentUser      = null;
-  let capturedFull     = null; // imagem full para detalhe
-  let capturedThumb    = null; // miniatura para galeria
-  let stream           = null;
-  let authMode         = 'login';
-  let allRecords       = [];
-  let currentFolder    = null;
+  let currentUser   = null;
+  let capturedFull  = null;
+  let capturedThumb = null;
+  let stream        = null;
+  let authMode      = 'login';
+  let allRecords    = [];
+  let currentFolder = null;
 
   // ── Auth ──────────────────────────────────────────
   onAuthStateChanged(auth, user => {
@@ -58,9 +58,10 @@
   });
 
   window.showView = name => {
-    ['auth','home','register','folders','folder-detail','detail'].forEach(v =>
-      document.getElementById('view-' + v).style.display = 'none'
-    );
+    ['auth','home','register','folders','folder-detail','detail','zoom'].forEach(v => {
+      const el = document.getElementById('view-' + v);
+      if (el) el.style.display = 'none';
+    });
     document.getElementById('view-' + name).style.display = 'flex';
     if (name === 'folders') loadFolders();
   };
@@ -158,19 +159,15 @@
   window.capturePhoto = () => {
     const video  = document.getElementById('video');
     const canvas = document.getElementById('canvas');
+    const ratio  = video.videoHeight / video.videoWidth;
 
-    // Imagem full (para visualização no detalhe) — 600px
-    const fullW = 600;
-    const ratio = video.videoHeight / video.videoWidth;
-    canvas.width  = fullW;
-    canvas.height = Math.round(fullW * ratio);
+    // Full 600px para detalhe
+    canvas.width = 600; canvas.height = Math.round(600 * ratio);
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     capturedFull = canvas.toDataURL('image/jpeg', 0.75);
 
-    // Thumbnail (para galeria) — 200px, bem comprimida
-    const thumbW = 200;
-    canvas.width  = thumbW;
-    canvas.height = Math.round(thumbW * ratio);
+    // Thumb 200px para grade
+    canvas.width = 200; canvas.height = Math.round(200 * ratio);
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     capturedThumb = canvas.toDataURL('image/jpeg', 0.6);
 
@@ -197,8 +194,8 @@
   // ── Save ──────────────────────────────────────────
   window.saveRecord = async () => {
     const nome = document.getElementById('nome-instrumental').value.trim();
-    if (!nome)          { shakeField('nome-instrumental'); return; }
-    if (!capturedFull)  { alert('Tire uma foto do instrumental primeiro.'); return; }
+    if (!nome)         { shakeField('nome-instrumental'); return; }
+    if (!capturedFull) { alert('Tire uma foto primeiro.'); return; }
     const btn = document.getElementById('btn-salvar');
     btn.disabled = true; btn.textContent = 'Salvando…';
     try {
@@ -206,18 +203,13 @@
       const obs      = document.getElementById('observacao').value.trim();
       const dateKey  = toDateKey(now);
       const dateLabel = toLongLabel(now);
-
       await addDoc(collection(db, 'instrumentais'), {
-        nome,
-        observacao:  obs || null,
-        imageB64:    capturedFull,   // imagem completa para detalhe
-        thumbB64:    capturedThumb,  // miniatura para galeria
-        uid:         currentUser.uid,
-        criadoEm:    now.toISOString(),
-        dateKey,
-        dateLabel
+        nome, observacao: obs || null,
+        imageB64: capturedFull, thumbB64: capturedThumb,
+        uid: currentUser.uid,
+        criadoEm: now.toISOString(),
+        dateKey, dateLabel
       });
-
       capturedFull = null; capturedThumb = null;
       document.getElementById('nome-instrumental').value = '';
       document.getElementById('observacao').value = '';
@@ -247,6 +239,7 @@
       allRecords = [];
       snap.forEach(d => allRecords.push({ id: d.id, ...d.data() }));
 
+      // Agrupar por dateKey
       const groups = {};
       allRecords.forEach(item => {
         const key   = item.dateKey   || toDateKey(new Date(item.criadoEm));
@@ -256,28 +249,32 @@
       });
 
       const sorted = Object.values(groups).sort((a,b) => b.key.localeCompare(a.key));
-
       list.innerHTML = '';
+
       if (sorted.length === 0) { empty.style.display = 'flex'; return; }
 
       sorted.forEach((folder, i) => {
-        const card   = document.createElement('div');
-        card.className = 'folder-card';
-        card.style.animationDelay = (i * 0.06) + 's';
-
-        // usa thumb se disponível, senão full
-        const coverSrc = folder.items[0].thumbB64 || folder.items[0].imageB64;
         const isToday  = folder.key === toDateKey(new Date());
-        const dayLabel = isToday ? 'Hoje' : getDayOfWeek(folder.key);
+        const dayLabel = isToday ? '📅 Hoje' : getDayOfWeek(folder.key);
+        const thumbs   = folder.items.slice(0, 3);
+
+        const card = document.createElement('div');
+        card.className = 'folder-card';
+        card.style.animationDelay = (i * 0.07) + 's';
+
+        // mini-grade de até 3 thumbs na capa
+        const previewHTML = thumbs.map(it => {
+          const src = it.thumbB64 || it.imageB64;
+          return `<div class="folder-preview-cell"><img src="${src}" alt=""></div>`;
+        }).join('');
 
         card.innerHTML = `
-          <div class="folder-thumb">
-            <img src="${coverSrc}" alt="${folder.label}">
-            <div class="folder-thumb-overlay"></div>
+          <div class="folder-preview preview-${thumbs.length}">
+            ${previewHTML}
           </div>
           <div class="folder-info">
             <div class="folder-icon-wrap">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
               </svg>
             </div>
@@ -285,13 +282,12 @@
               <span class="folder-day">${dayLabel}</span>
               <span class="folder-date">${folder.label}</span>
             </div>
-            <div class="folder-meta">
-              <span class="folder-count">${folder.items.length}</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <path d="M9 18l6-6-6-6"/>
-              </svg>
-            </div>
+            <div class="folder-badge">${folder.items.length}</div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--text2);flex-shrink:0">
+              <path d="M9 18l6-6-6-6"/>
+            </svg>
           </div>`;
+
         card.onclick = () => openFolder(folder);
         list.appendChild(card);
       });
@@ -302,36 +298,36 @@
 
   window.openFolder = folder => {
     currentFolder = folder;
-    document.getElementById('folder-detail-title').textContent = folder.label;
-    document.getElementById('folder-detail-count').textContent =
+    document.getElementById('fd-title').textContent = folder.label;
+    document.getElementById('fd-day').textContent   = folder.key === toDateKey(new Date()) ? 'Hoje' : getDayOfWeek(folder.key);
+    document.getElementById('fd-count').textContent =
       `${folder.items.length} ${folder.items.length === 1 ? 'instrumental' : 'instrumentais'}`;
     renderFolderItems(folder.items);
     showView('folder-detail');
   };
 
   function renderFolderItems(items) {
-    const grid = document.getElementById('folder-items-grid');
+    const grid = document.getElementById('fd-grid');
     grid.innerHTML = '';
     items.forEach((item, i) => {
+      const src  = item.thumbB64 || item.imageB64;
       const card = document.createElement('div');
-      card.className = 'gallery-card';
+      card.className = 'item-card';
       card.style.animationDelay = (i * 0.05) + 's';
-
-      // usa thumb para grade — muito mais leve
-      const src = item.thumbB64 || item.imageB64;
-
-      const img = document.createElement('img');
-      img.src = src;
-      img.alt = item.nome;
-
-      const info = document.createElement('div');
-      info.className = 'card-info';
-      info.innerHTML = `
-        <span class="card-name">${item.nome}</span>
-        ${item.observacao ? `<span class="card-obs">${item.observacao}</span>` : ''}`;
-
-      card.appendChild(img);
-      card.appendChild(info);
+      card.innerHTML = `
+        <div class="item-img-wrap">
+          <img src="${src}" alt="${item.nome}">
+        </div>
+        <div class="item-info">
+          <span class="item-name">${item.nome}</span>
+          ${item.observacao ? `<span class="item-obs">${item.observacao}</span>` : '<span class="item-obs" style="color:var(--text2);font-style:italic">Sem observação</span>'}
+          <span class="item-time">${new Date(item.criadoEm).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
+        </div>
+        <div class="item-chevron">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </div>`;
       card.onclick = () => openDetail(item);
       grid.appendChild(card);
     });
@@ -339,15 +335,68 @@
 
   // ── Detail ────────────────────────────────────────
   window.openDetail = item => {
-    // usa imagem full no detalhe
-    document.getElementById('detail-img').src          = item.imageB64 || item.thumbB64;
+    const imgSrc = item.imageB64 || item.thumbB64;
+    document.getElementById('detail-img').src          = imgSrc;
     document.getElementById('detail-nome').textContent = item.nome;
     document.getElementById('detail-obs').textContent  = item.observacao || '—';
     document.getElementById('detail-data').textContent = new Date(item.criadoEm).toLocaleDateString('pt-BR', {
       day:'2-digit', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit'
     });
     document.getElementById('btn-delete').onclick = () => deleteRecord(item);
+
+    // zoom: clique na imagem
+    document.getElementById('detail-img').onclick = () => openZoom(imgSrc);
     showView('detail');
+  };
+
+  // ── Zoom ──────────────────────────────────────────
+  window.openZoom = src => {
+    const img = document.getElementById('zoom-img');
+    img.src = src;
+    img.style.transform = 'scale(1)';
+    img.style.transformOrigin = '50% 50%';
+    document.getElementById('view-zoom').style.display = 'flex';
+
+    // pinch-to-zoom
+    let scale = 1, startDist = 0, startScale = 1;
+    let isDragging = false, startX = 0, startY = 0, tx = 0, ty = 0;
+
+    img.ontouchstart = e => {
+      if (e.touches.length === 2) {
+        startDist  = getDist(e.touches);
+        startScale = scale;
+      } else if (e.touches.length === 1 && scale > 1) {
+        isDragging = true;
+        startX = e.touches[0].clientX - tx;
+        startY = e.touches[0].clientY - ty;
+      }
+    };
+    img.ontouchmove = e => {
+      e.preventDefault();
+      if (e.touches.length === 2) {
+        const d = getDist(e.touches);
+        scale = Math.min(5, Math.max(1, startScale * (d / startDist)));
+        applyTransform();
+      } else if (isDragging && e.touches.length === 1) {
+        tx = e.touches[0].clientX - startX;
+        ty = e.touches[0].clientY - startY;
+        applyTransform();
+      }
+    };
+    img.ontouchend = e => { if (e.touches.length < 2) isDragging = false; };
+
+    function applyTransform() {
+      img.style.transform = `scale(${scale}) translate(${tx/scale}px, ${ty/scale}px)`;
+    }
+    function getDist(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx*dx + dy*dy);
+    }
+  };
+
+  window.closeZoom = () => {
+    document.getElementById('view-zoom').style.display = 'none';
   };
 
   window.deleteRecord = async item => {
@@ -364,23 +413,18 @@
 
   // ── Helpers ───────────────────────────────────────
   function toDateKey(date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
   }
   function toLongLabel(date) {
     return date.toLocaleDateString('pt-BR', { day:'2-digit', month:'long', year:'numeric' });
   }
   function getDayOfWeek(dateKey) {
     const [y,m,d] = dateKey.split('-').map(Number);
-    const days = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
-    return days[new Date(y, m-1, d).getDay()];
+    return ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'][new Date(y,m-1,d).getDay()];
   }
   function shakeField(id) {
     const el = document.getElementById(id);
-    el.classList.remove('shake'); void el.offsetWidth;
-    el.classList.add('shake'); el.focus();
+    el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); el.focus();
   }
   function showSuccessToast() {
     const t = document.getElementById('toast');
@@ -410,7 +454,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 .auth-logo-name span{color:var(--accent);font-style:italic}
 .auth-title{font-family:var(--font-display);font-size:1.35rem;text-align:center}
 .auth-fields{display:flex;flex-direction:column;gap:0.8rem}
-.auth-input{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:0.85rem 1rem;outline:none;transition:border-color .2s;-webkit-appearance:none}
+.auth-input{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:0.85rem 1rem;outline:none;-webkit-appearance:none}
 .auth-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,170,0.12)}
 .auth-error{display:none;font-size:0.82rem;line-height:1.4;padding:0.6rem 0.8rem;border-radius:8px;border:1px solid}
 .btn-auth-primary{background:linear-gradient(135deg,var(--accent),#00b88d);color:#060d1a;font-family:var(--font-body);font-weight:700;font-size:1rem;border:none;border-radius:14px;padding:1rem;cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -425,7 +469,7 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 .forgot-link button{background:none;border:none;color:var(--text2);font-family:var(--font-body);font-size:0.8rem;cursor:pointer;text-decoration:underline}
 
 /* HOME */
-#view-home{background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(0,212,170,0.11) 0%,transparent 70%),radial-gradient(ellipse 60% 40% at 90% 80%,rgba(0,153,255,0.07) 0%,transparent 70%),var(--bg);align-items:center;justify-content:center;padding:2rem 1.5rem}
+#view-home{background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(0,212,170,0.11) 0%,transparent 70%),var(--bg);align-items:center;justify-content:center;padding:2rem 1.5rem}
 .home-logo{width:72px;height:72px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:20px;display:flex;align-items:center;justify-content:center;margin-bottom:1.5rem;box-shadow:0 0 40px rgba(0,212,170,0.3)}
 .home-logo svg{width:38px;height:38px}
 .home-title{font-family:var(--font-display);font-size:2.6rem;letter-spacing:-0.02em;text-align:center;line-height:1.1;margin-bottom:0.5rem}
@@ -439,24 +483,26 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 .btn-secondary:active{background:var(--surface2)}
 .btn-logout{background:none;border:none;color:var(--text2);font-family:var(--font-body);font-size:0.82rem;cursor:pointer;margin-top:0.5rem;display:flex;align-items:center;gap:0.4rem;-webkit-tap-highlight-color:transparent}
 
-/* REGISTER */
-#view-register{background:var(--bg)}
+/* TOP BAR */
 .top-bar{display:flex;align-items:center;gap:1rem;padding:1rem 1.2rem;padding-top:calc(1rem + env(safe-area-inset-top,0px));border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:10;flex-shrink:0}
 .top-bar-title{font-family:var(--font-display);font-size:1.25rem;flex:1}
 .btn-icon{width:38px;height:38px;background:transparent;border:1px solid var(--border);border-radius:10px;color:var(--text2);display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;flex-shrink:0}
+
+/* REGISTER */
+#view-register{background:var(--bg)}
 #camera-section{flex:1;flex-direction:column;align-items:center;justify-content:flex-end;position:relative;background:#000;display:none}
 #video{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
 .camera-controls{position:relative;z-index:5;width:100%;display:flex;align-items:center;justify-content:center;padding:2rem 2rem calc(2rem + var(--safe-bottom));background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,transparent 100%)}
 .shutter-btn{width:72px;height:72px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);cursor:pointer;box-shadow:0 0 0 2px #fff;-webkit-tap-highlight-color:transparent}
 .shutter-btn:active{transform:scale(.93)}
 #preview-section{display:none;flex-direction:column;align-items:center;flex-shrink:0}
-#preview-img{width:100%;max-height:280px;object-fit:cover}
+#preview-img{width:100%;max-height:260px;object-fit:cover}
 .retake-bar{width:100%;padding:.7rem 1.2rem;background:rgba(0,0,0,0.5);display:flex;justify-content:flex-end}
 .btn-retake{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#fff;font-size:.85rem;padding:.4rem .9rem;cursor:pointer;display:flex;align-items:center;gap:.4rem}
 #form-section{display:none;flex-direction:column;padding:1.5rem 1.2rem;gap:1.2rem;flex:1}
 .field-label{font-size:.78rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem}
 .badge-required{background:var(--accent);color:#060d1a;font-size:.6rem;padding:1px 5px;border-radius:4px;font-weight:700}
-.field-input,.field-textarea{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:.85rem 1rem;outline:none;transition:border-color .2s;-webkit-appearance:none}
+.field-input,.field-textarea{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;color:var(--text);font-family:var(--font-body);font-size:1rem;padding:.85rem 1rem;outline:none;-webkit-appearance:none}
 .field-input:focus,.field-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,170,0.12)}
 .field-textarea{resize:none;height:90px}
 .form-actions{padding-bottom:calc(1rem + var(--safe-bottom))}
@@ -466,57 +512,132 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
 .shake{animation:shake .4s ease;border-color:var(--danger)!important}
 
-/* FOLDERS */
+/* FOLDERS — lista de pastas */
 #view-folders{background:var(--bg)}
-.folders-list{flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:0.8rem 1.2rem calc(1rem + var(--safe-bottom))}
-@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-.folder-card{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:0.8rem;cursor:pointer;animation:fadeUp .35s both;-webkit-tap-highlight-color:transparent;transition:transform .15s}
+.folders-list{flex:1;overflow-y:auto;padding:1rem 1.2rem calc(1rem + var(--safe-bottom));display:flex;flex-direction:column;gap:0.8rem}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+.folder-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;overflow:hidden;cursor:pointer;
+  animation:fadeUp .35s both;-webkit-tap-highlight-color:transparent;
+  transition:transform .15s,box-shadow .15s;
+}
 .folder-card:active{transform:scale(.98)}
-.folder-thumb{width:100%;height:120px;position:relative;overflow:hidden;flex-shrink:0;background:var(--surface2)}
-.folder-thumb img{width:100%;height:100%;object-fit:cover;display:block}
-.folder-thumb-overlay{position:absolute;inset:0;background:linear-gradient(to bottom,transparent 40%,rgba(6,13,26,0.7) 100%)}
-.folder-info{display:flex;align-items:center;gap:0.8rem;padding:0.9rem 1rem}
-.folder-icon-wrap{width:36px;height:36px;flex-shrink:0;background:rgba(0,212,170,0.1);border:1px solid rgba(0,212,170,0.2);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--accent)}
-.folder-text{display:flex;flex-direction:column;flex:1;gap:0.1rem;min-width:0}
-.folder-day{font-size:0.75rem;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.05em}
-.folder-date{font-family:var(--font-display);font-size:1.05rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.folder-meta{display:flex;align-items:center;gap:0.3rem;flex-shrink:0;color:var(--text2)}
-.folder-count{font-size:0.85rem;font-weight:600;color:var(--text2);background:var(--surface2);border-radius:100px;padding:0.15rem 0.5rem;border:1px solid var(--border)}
+
+/* preview de thumbs na capa da pasta */
+.folder-preview{
+  width:100%;height:100px;display:grid;gap:2px;background:var(--surface2);overflow:hidden;
+}
+.folder-preview.preview-1{grid-template-columns:1fr}
+.folder-preview.preview-2{grid-template-columns:1fr 1fr}
+.folder-preview.preview-3{grid-template-columns:2fr 1fr}
+
+.folder-preview-cell{overflow:hidden;position:relative}
+.folder-preview-cell img{width:100%;height:100%;object-fit:cover;display:block}
+
+/* preview-3: segunda coluna tem 2 células empilhadas */
+.folder-preview.preview-3 .folder-preview-cell:nth-child(1){grid-row:1/3}
+.folder-preview.preview-3 .folder-preview-cell:nth-child(2),.folder-preview.preview-3 .folder-preview-cell:nth-child(3){grid-column:2}
+
+.folder-info{
+  display:flex;align-items:center;gap:0.8rem;
+  padding:0.85rem 1rem;
+}
+.folder-icon-wrap{
+  width:38px;height:38px;flex-shrink:0;
+  background:rgba(0,212,170,0.1);border:1px solid rgba(0,212,170,0.2);
+  border-radius:11px;display:flex;align-items:center;justify-content:center;color:var(--accent);
+}
+.folder-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:0.1rem}
+.folder-day{font-size:0.72rem;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.05em}
+.folder-date{font-family:var(--font-display);font-size:1.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-badge{background:var(--surface2);border:1px solid var(--border);border-radius:100px;font-size:0.8rem;font-weight:600;color:var(--text2);padding:0.15rem 0.55rem;flex-shrink:0}
+
 .folders-empty{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:3rem;color:var(--text2);text-align:center}
 .folders-empty svg{opacity:.3}
 .folders-empty p{font-size:.95rem;line-height:1.5}
 
-/* FOLDER DETAIL */
+/* FOLDER DETAIL — itens como lista */
 #view-folder-detail{background:var(--bg)}
-.folder-detail-header{padding:0 1.2rem 0.8rem;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
-.folder-detail-date{font-family:var(--font-display);font-size:1.4rem;line-height:1.2;padding-top:0.2rem}
-.folder-detail-count{font-size:0.8rem;color:var(--text2);margin-top:0.2rem}
-.folder-items-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px;flex:1;overflow-y:auto;padding:3px;padding-bottom:calc(1rem + var(--safe-bottom));background:var(--border)}
+.fd-header{padding:0.6rem 1.2rem 1rem;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
+.fd-day{font-size:0.72rem;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.2rem}
+.fd-title{font-family:var(--font-display);font-size:1.4rem;line-height:1.2}
+.fd-count{font-size:0.78rem;color:var(--text2);margin-top:0.2rem}
 
-.gallery-card{background:var(--surface2);cursor:pointer;aspect-ratio:1/1;overflow:hidden;position:relative;animation:fadeUp .35s both;-webkit-tap-highlight-color:transparent;border-radius:4px}
-.gallery-card img{width:100%;height:100%;object-fit:cover;display:block}
-.gallery-card:active{opacity:0.85}
-.card-info{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(to top,rgba(6,13,26,0.95) 0%,transparent 100%);padding:1.5rem .7rem .7rem;display:flex;flex-direction:column;gap:.15rem}
-.card-name{font-size:.8rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.card-obs{font-size:.68rem;color:rgba(255,255,255,0.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fd-grid{flex:1;overflow-y:auto;padding:0.8rem 1.2rem calc(1rem + var(--safe-bottom));display:flex;flex-direction:column;gap:0.7rem}
 
-.loading-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:3rem auto}
-@keyframes spin{to{transform:rotate(360deg)}}
+.item-card{
+  display:flex;align-items:center;gap:0.9rem;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:0.7rem;cursor:pointer;
+  animation:fadeUp .3s both;-webkit-tap-highlight-color:transparent;
+  transition:transform .15s;
+}
+.item-card:active{transform:scale(.98)}
+.item-img-wrap{width:64px;height:64px;border-radius:10px;overflow:hidden;flex-shrink:0;background:var(--surface2)}
+.item-img-wrap img{width:100%;height:100%;object-fit:cover;display:block}
+.item-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:0.2rem}
+.item-name{font-weight:600;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item-obs{font-size:0.78rem;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item-time{font-size:0.72rem;color:var(--accent);margin-top:0.1rem}
+.item-chevron{color:var(--text2);flex-shrink:0}
 
 /* DETAIL */
 #view-detail{background:var(--bg)}
-.detail-img-wrap{width:100%;max-height:55vh;overflow:hidden;flex-shrink:0;background:var(--surface2)}
+.detail-img-wrap{
+  width:100%;height:260px;overflow:hidden;flex-shrink:0;
+  background:var(--surface2);position:relative;cursor:zoom-in;
+}
 .detail-img-wrap img{width:100%;height:100%;object-fit:cover;display:block}
-.detail-body{padding:1.5rem 1.2rem;flex:1;display:flex;flex-direction:column;gap:1.2rem}
-.detail-nome{font-family:var(--font-display);font-size:1.8rem;line-height:1.2}
+.zoom-hint{
+  position:absolute;bottom:0.6rem;right:0.8rem;
+  background:rgba(0,0,0,0.55);border-radius:8px;
+  padding:0.3rem 0.6rem;font-size:0.72rem;color:#fff;
+  display:flex;align-items:center;gap:0.3rem;pointer-events:none;
+}
+.detail-body{padding:1.5rem 1.2rem;flex:1;display:flex;flex-direction:column;gap:1.1rem}
+.detail-nome{font-family:var(--font-display);font-size:1.7rem;line-height:1.2}
 .detail-row{display:flex;flex-direction:column;gap:.3rem}
 .detail-key{font-size:.72rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.07em}
 .detail-val{font-size:.95rem;color:var(--text);line-height:1.5}
 .detail-date{color:var(--text2);font-size:.85rem}
 .btn-danger{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:14px;color:#ef4444;font-family:var(--font-body);font-weight:600;font-size:.95rem;padding:.9rem;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:.5rem;margin-top:auto;margin-bottom:calc(1rem + var(--safe-bottom));-webkit-tap-highlight-color:transparent}
 
+/* ZOOM */
+#view-zoom{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,0.96);
+  display:none;
+  align-items:center;justify-content:center;
+  z-index:999;overflow:hidden;
+}
+.zoom-close{
+  position:absolute;top:calc(1rem + env(safe-area-inset-top,0px));right:1rem;
+  width:40px;height:40px;background:rgba(255,255,255,0.15);
+  border:none;border-radius:50%;color:#fff;font-size:1.2rem;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;z-index:10;-webkit-tap-highlight-color:transparent;
+}
+#zoom-img{
+  max-width:100%;max-height:100%;
+  object-fit:contain;touch-action:none;
+  transition:transform 0.05s;
+  user-select:none;-webkit-user-select:none;
+}
+.zoom-tip{
+  position:absolute;bottom:calc(1.5rem + var(--safe-bottom));
+  left:50%;transform:translateX(-50%);
+  font-size:0.78rem;color:rgba(255,255,255,0.5);
+  white-space:nowrap;pointer-events:none;
+}
+
+.loading-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:3rem auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 #canvas{display:none}
-#toast{position:fixed;bottom:calc(1.5rem + var(--safe-bottom));left:50%;transform:translateX(-50%) translateY(80px);background:var(--accent);color:#060d1a;font-weight:600;font-size:.9rem;padding:.75rem 1.5rem;border-radius:100px;display:flex;align-items:center;gap:.5rem;transition:transform .35s cubic-bezier(0.34,1.56,0.64,1),opacity .35s;opacity:0;z-index:999;white-space:nowrap}
+#toast{position:fixed;bottom:calc(1.5rem + var(--safe-bottom));left:50%;transform:translateX(-50%) translateY(80px);background:var(--accent);color:#060d1a;font-weight:600;font-size:.9rem;padding:.75rem 1.5rem;border-radius:100px;display:flex;align-items:center;gap:.5rem;transition:transform .35s cubic-bezier(0.34,1.56,0.64,1),opacity .35s;opacity:0;z-index:998;white-space:nowrap}
 #toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 </style>
 </head>
@@ -677,11 +798,12 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
       </svg>
     </button>
   </div>
-  <div class="folder-detail-header">
-    <div class="folder-detail-date" id="folder-detail-title"></div>
-    <div class="folder-detail-count" id="folder-detail-count"></div>
+  <div class="fd-header">
+    <div class="fd-day" id="fd-day"></div>
+    <div class="fd-title" id="fd-title"></div>
+    <div class="fd-count" id="fd-count"></div>
   </div>
-  <div id="folder-items-grid" class="folder-items-grid"></div>
+  <div id="fd-grid"></div>
 </div>
 
 <!-- DETAIL -->
@@ -694,7 +816,16 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
     </button>
     <span class="top-bar-title">Detalhes</span>
   </div>
-  <div class="detail-img-wrap"><img id="detail-img" src="" alt=""></div>
+  <div class="detail-img-wrap">
+    <img id="detail-img" src="" alt="">
+    <div class="zoom-hint">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        <line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+      </svg>
+      Toque para ampliar
+    </div>
+  </div>
   <div class="detail-body">
     <h2 class="detail-nome" id="detail-nome"></h2>
     <div class="detail-row">
@@ -713,6 +844,13 @@ html,body{height:100%;width:100%;background:var(--bg);color:var(--text);font-fam
       Excluir Registro
     </button>
   </div>
+</div>
+
+<!-- ZOOM -->
+<div id="view-zoom">
+  <button class="zoom-close" onclick="closeZoom()">✕</button>
+  <img id="zoom-img" src="" alt="Zoom">
+  <div class="zoom-tip">Faça pinch para ampliar • Toque ✕ para fechar</div>
 </div>
 
 <canvas id="canvas"></canvas>
