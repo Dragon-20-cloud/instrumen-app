@@ -320,7 +320,7 @@
   // ── Compartilhar WhatsApp ─────────────────────────
   window.shareWhatsApp = async (item) => {
     const imgSrc = item.imageB64 || item.thumbB64;
-    const texto  = `📋 *InstruMed*\n\n🔧 *${item.nome}*${item.observacao ? `\n📝 ${item.observacao}` : ''}\n📅 ${new Date(item.criadoEm).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}`;
+    const texto  = `🔧 *${item.nome}*${item.observacao ? `\n📝 ${item.observacao}` : ''}\n📅 ${new Date(item.criadoEm).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}`;
 
     // Tenta usar Web Share API com arquivo (suportado em Android Chrome)
     if (navigator.share && navigator.canShare) {
